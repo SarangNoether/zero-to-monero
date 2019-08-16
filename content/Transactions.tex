@@ -1,4 +1,4 @@
-\chapter{Monero Transactions}
+achapter{Monero Transactions}
 \label{chapter:transactions}
 
 \section{User keys}
@@ -292,7 +292,7 @@ With this observation made we can see the utility of $z G$. All commitment terms
 	\( k_{\pi,1}^o,...,k_{\pi,m}^o, z \), which are known to the sender. 
 	MLSAG in this scenario does not use a key image for the commitment to zero $z G$. This means building and verifying the signature excludes the term $r_{i,m+1} \mathcal{H}_p(K_{i,m+1}) + c_i \tilde{K}_z$.\\
 	
-	The message $\mathfrak{m}$ signed in the input MLSAG is essentially a hash of all transaction information {\em except} for the MLSAG signature itself.\footnote{\label{MLSAG_message}The\marginnote{src/ringct/ rctSigs.cpp get\_pre\_mlsag \_hash()} actual message is $\mathfrak{m} = \mathcal{H}(\mathcal{H}(tx\textunderscore prefix),\mathcal{H}(ss),\mathcal{H}(\text{range proof signatures}))$ where:\par
+	The message $\mathfrak{m}$ signed in the input MLSAG is essentially a hash of all transaction information {\em except} for the MLSAG signature itself.\footnote{\label{MLSAG_message}The\marginnote{src/ringct/ rctSigs.cpp get\_pre\_mlsag \_hash()} actual message is $\mathfrak{m} = \mathcal{H}(\mathcal{H}(tx\textunderscore prefix),\mathcal{H}(ss),\mathcal{H}(\text{range proof}))$ where:\par
 	$tx\textunderscore prefix = $\{transaction era version (i.e. ringCT = 2), inputs \{key offsets, key image\}, outputs \{one-time addresses\}, extra \{transaction public key, payment ID or encoded payment ID, misc.\}\}\par
 	$ss = $\{signature type (simple vs full), transaction fee, pseudo output commitments for inputs, ecdhInfo (masks and amounts), output commitments\}.\par
 	See Appendices \ref{appendix:RCTTypeFull} \& \ref{appendix:RCTTypeSimple} regarding this terminology.} This ensures transactions are tamper-proof from the perspective of both transaction authors and verifiers.
@@ -300,11 +300,11 @@ With this observation made we can see the utility of $z G$. All commitment terms
 	$k^o$ is the essence of Monero's transaction model. Signing $\mathfrak{m}$ with $k^o$ proves you are the owner/recipient of the amount committed to in $C^a$. Verifiers can be confident that transaction authors are spending their own funds.
 	
 	\item[Range proofs for outputs]
-	To\marginnote{src/ringct/ rctSigs.cpp prove- Range()} avoid the amount ambiguity of outputs described in Section  \ref{sec:range_proofs}, the sender must also employ the Borromean signature scheme of Section \ref{sec:borromean} to sign amount ranges for each output $t \in \{1, ..., p\}$. No message $\mathfrak{m}$ is signed by the Borromean signatures.\\
+	To\marginnote{src/ringct/ rctSigs.cpp prove- RangeBulletproof()} avoid the amount ambiguity of outputs described in Section  \ref{sec:range_proofs}, the sender must employ the Bulletproofs proving system to assert amount ranges for each output $t \in \{1, ..., p\}$. A single aggregate Bulletproof is used for all outputs in a transaction. \\
 	
 	Range proofs are not needed for input amounts because they are either expressed clearly (as with transaction fees and block rewards), or were proven in range when first created as outputs.
 	
-	In the current version of the Monero software, each amount is expressed as a fixed point number of 64 bits. This means the data for each range proof will contain 64 bit commitments and $2 \cdot 64 + 1$ signature terms.
+	In the current version of the Monero software, each amount is expressed as a fixed point number of 64 bits.
 	
 \end{description}
 
@@ -364,19 +364,13 @@ Including\marginnote{src/ringct/ rctSigs.cpp verRctMG()} the computation of \((\
 
 \subsubsection*{Range proofs (outputs)}
 
-From\marginnote{src/ringct/ ringCT.cpp genBorromean()} Section \ref{sec:borromean}, Section \ref{sec:range_proofs}, and Section \ref{full-signature}, we know that a Monero Borromean signature for range proofs takes the form of an n-tuple\vspace{.2cm}%genBorromean in ringCT.cpp
-\[\sigma = (c_1, r_{0, 1}, r_{0, 2}, r_{1, 1}..., r_{63, 2} )  \]
+From\marginnote{src/ringct/ rctSigs.cpp prove- RangeBulletproof()} Section \ref{sec:range_proofs} and Section \ref{full-signature}, we know that an aggregate range proof on $p$ outputs requires \( ( 2 \lceil \log_2(64p) \rceil + 9 ) 32 \) bytes total.
 
-Ring keys are considered part of ring signatures. However, in this case it is only necessary to store the commitments $C_i$, as the ring key counterparts $C_i - 2^i H$ can be easily derived (for verification purposes). 
-
-Respecting this convention, a range proof will require \( ( 1 + 64 \cdot 2 + 64  ) 32 = 6176\) bytes per output.
-
-Including\marginnote{src/ringct/ rctSigs.cpp verRange()} $C_i - 2^i H$ and checking $\sum_i C_i = C$, range proofs for $p$ outputs will require this to verify (Section \ref{range_proofs_blockchain_section}):
+To verify such an aggregate proof:
 
 \begin{itemize}
     \setlength\itemsep{\listspace}
-    \item [\textbf{VRSF}] Verify range proof special function \quad \([p*64]\)
-    \item [\textbf{DVBA}] Double-variable-base addition for some integers $a, b$, and point $B$: $a G + b B$ \quad \([p*2*64]\)
+    \item [\textbf{MULT}] Multiexponentiation with $128p + 2$ fixed-base terms and $2 \lceil \log_2(64p) \rceil + p + 4$ variable-base terms
 \end{itemize}
 
 
@@ -490,15 +484,7 @@ Including\marginnote{src/ringct/ rctSigs.cpp verRctMG- Simple() verRct- Simple()
 
 \subsubsection*{Range proofs (outputs)}
 
-The size of range proofs remains the same for {\tt RCTTypeSimple} transactions. As we calculated for {\tt RCTTypeFull} transactions, each output will require 6176 bytes of storage.
-
-As\marginnote{src/ringct/ rctSigs.cpp verRange()} before, each range proof will require this to verify (Section \ref{range_proofs_blockchain_section}):
-
-\begin{itemize}
-    \setlength\itemsep{\listspace}
-    \item [\textbf{VRSF}] Verify range proof special function \quad \([p*64]\)
-    \item [\textbf{DVBA}] Double-variable-base addition for some integers $a, b$, and point $B$: $a G + b B$ \quad \([p*2*64]\)
-\end{itemize}
+The size and verification complexity of range proofs remain the same for {\tt RCTTypeSimple} transactions.
 
 
 \newpage
@@ -526,11 +512,7 @@ To summarize this chapter we present the main content of a transaction, organize
             \item \textit{Mask}: $y_t + \mathcal{H}_n(\mathcal{H}_n(r K^v_t,t))$
             \item \textit{Amount}: $b_t + \mathcal{H}_n(\mathcal{H}_n(\mathcal{H}_n(r K^v_t,t)))$
         \end{itemize}
-        \item \textbf{Range proof} for output amount $b_t$ using a Borromean ring signature
-        \begin{itemize}
-            \item \textit{Signatures}: $\sigma$ terms $c_1$, and $r_{i,j}$ for $i \in \{0,...,63\}$ and $j \in \{1,2\}$
-            \item \textit{Bit commitments}: $C_i$ for $i \in \{0,...,63\}$
-        \end{itemize}
+        \item \textbf{Range proof} for all amounts using an aggregate Bulletproof
     \end{itemize}
     \item \underline{Transaction fee}: communicated in clear text multiplied by $10^{12}$ (i.e. atomic units, see chapter \ref{chapter:blockchain}), so a fee of 1.0 would be recorded as 1000000000000
     \item \underline{Extra}: includes the transaction public key $r G$, or, if at least one output is directed to a subaddress, $r_t K^{s,i}_t$ for each subaddress'd output $t$ and $r_t G$ for each normal address'd output $t$, and a payment ID or encoded payment ID (max one per transaction)\footnote{No information stored in the `extra' field is verified, though it {\em is} signed by input MLSAGs, so no tampering is possible (except with negligible probability).}
@@ -559,11 +541,10 @@ For {\tt RCTTypeSimple} we need $(2(v+1)+2) \cdot m \cdot 32$ bytes of storage, 
     \item [\textbf{VBA}] Variable-base additions for some integers $a, b$, and points $A, B$: $a A + b B$ \quad \([m*(v+1)]\)
 \end{itemize}
 
-Output range proofs need $p \cdot 6176$ bytes of storage, and verify with:
+Output range proofs need $( 2 \lceil \log_2(64p) \rceil + 9 ) \cdot 32$ bytes of storage, and verify with:
 \begin{itemize}
     \setlength\itemsep{\listspace}
-    \item [\textbf{VRSF}] Verify range proof special function \quad \([p*64]\)
-    \item [\textbf{DVBA}] Double-variable-base addition for some integers $a, b$, and point $B$: $a G + b B$ \quad \([p*2*64]\)
+    \item [\textbf{MULT}] Multiexponentiation with $128p + 2$ fixed-base terms and $2 \lceil \log_2(64p) \rceil + p + 4$ variable-base terms
 \end{itemize}
 
 Miscellaneous requirements:

@@ -73,72 +73,17 @@ For instance, we could have $a_1 = 6$, $a_2 = 5$, $b_1 = 21$, and $b_2 = -10$.\v
 
 Since $-10 = l-10$, we have effectively created $l$ more Moneroj (over 7.2x10$^{74}$!) than we put in.
 
-The solution addressing this issue in Monero is to prove each output amount is in a certain range using the Borromean signature scheme described in Section \ref{sec:borromean}. This method treats each bit in the binary representation of the amount as a separate amount which we can commit to zero.
-\\
+The solution used in Monero is to prove that each output commitment is to a value within the range $[0,2^{64})$, which cannot be misused to form a negative-value representation to bypass the balance check. The proving system used for this purpose is Bulletproofs, described in \cite{bulletproofs}. Unlike earlier range proof systems, Bulletproofs scale in size logarithmically with the number of bits in the amount representation, making them extremely efficient.
 
-Given a commitment $C(b)$ with blinding factor $y_b$ for amount \(b\), use the binary representation \((b_0, b_1, ..., b_{k-1})\) such that 
-\[b = b_0 2^0 + b_1 2^1 + ... + b_{k-1} 2^{k-1}  \]
+In addition to efficient proofs for single commitments, it is possible to generate a single aggregate Bulletproof that shows each commitment in a set is within the proper range. This single proof also scales logarithmically with the number of commitments, but can only be generated with knowledge of all commitment values and masks; that is, it is not possible to take a collection of arbitrary single-commitment Bulletproofs and later combine them into an aggregate proof. Additionally, the number of commitments included in an aggregate proof must be a power of two. In the case where the number of commitments is not a power of two, dummy zero-value commitments are included (but not stored with the proof, as the verifier can identically reconstruct them).
 
-Generate random numbers \(y_0, ..., y_{k-1} \in_R \mathbb{Z}_l\) to be used as blinding factors.
-Define also Pedersen commitments for each \(b_i\), \(C_ i = y_i G + b_i 2^i H\),  and derive public keys \(\{C_i, C_i - 2^i H\}\). 
+The construction of Bulletproofs in Monero closely follows the paper \cite{bulletproofs}. However, group elements in the proof structure are offset by the scalar multiplier $8^{-1}$ prior to inclusion in transaction data. The verifier then multiplies each such point by the scalar multiplier $8$ before beginning the verification process. This recovers the original points used in the proof, while ensuring that all points lie within the correct curve subgroup.
 
+Bulletproofs are efficient to verify. Given an arbitrary batch of proofs (whether aggregate or not), the verifier can use a single multiexponentiation operation to complete the verification of all proofs in the batch at once. The paper describes how to combine common curve group generators to make this process much faster than verifying each proof separately. In the event the batch verification fails, proofs can be checked individually or in smaller batches to identify failed proofs.
 
-Clearly one of those public keys will equal \(y_i G\):\vspace{.2cm}
-\begin{alignat*}{3}
-\textrm{if}\ b_i = 0 \ \textrm{then}\ \ \ &  \ C_i &&= y_i G + 0 H &&= y_i G \\
-\textrm{if}\ b_i = 1 \ \textrm{then}\ \ \ & \ C_i - 2^i H &&= y_i G + 2^i H  - 2^i H &&= y_i G 
-\end{alignat*}
-
-In other words, a blinding factor \(y_i\) will always be the private key corresponding to one of the points \(\{C_i, C_i - 2^i H\}\). The point that equals $y_i G$ is a {\em commitment to zero}, because either $b_i 2^i = 0$ or $b_i 2^i - 2^i = 0$. We can prove a transaction output's amount $b$ is in the range $[0, ..., 2^{k} -1]$ by signing it using the Borromean Ring Signature scheme of Section\marginnote{src/ringct/ rctSigs.cpp genBorromean()} \ref{sec:borromean} with the ring of public keys:\vspace{.2cm}
-\[\{ \{C_0, C_0 - 2^0 H\}, ..., \{C_{k-1}, C_{k-1} - 2^{k-1} H\}  \}\]\\[-.4cm]
-where we know the private keys $\{y_0, ..., y_{k-1}\}$ corresponding to each pair.\vspace{.2cm}
-\begin{center}
-    Resulting in a signature $\sigma = (c_1, r_{0,1}, r_{0,2}, r_{1,1}..., r_{k-1,2})$
-\end{center}
-
-
-\section{Range proofs in a blockchain}
-\label{range_proofs_blockchain_section}
-
-In the context of Monero we will use range proofs to prove there are valid amounts in the outputs of each transaction.
-
-Transaction verifiers will have to check that the sum of each output's range proof commitments $C_i$ equals its amount commitment $C_b$. For this to work we need to modify our definition of the blinding factor\marginnote{src/ringct/ rctSigs.cpp prove- Range()} $y_b$: set $y_0, ..., y_{k-1} \in_R \mathbb{Z}_l$ and define $y_{b} = \sum_{i=0}^{k-1} y_i$. The following equation now holds
-\[\sum^{k-1}_{i=0} C_i = C_b\]
-
-We will store only the range proof commitments/keys $C_i$, the output amount's commitment $C_b$, and the signature $\sigma$'s terms in the blockchain. The mining community can easily calculate $C_i - 2^i H$ and verify the Borromean ring signature for each output.
-
-It will not be necessary for the receiver nor any other party to know the blinding factors $y_i$, as their sole purpose is proving a new output's amount is in range. 
-\\
-
-Since the Borromean signature scheme requires knowledge of $y_i$ to produce a signature, any third party who verifies one can convince himself that each loop contains a commitment to zero, so total amounts must fall within range and money is not being artificially created.\\
-
-In this scheme we store (1+$2*k$) integers, use $k$ public keys (commitments), and verify with:
+A transaction must have exactly one range proof. For an aggregate Bulletproof with $p$ commitments (where $p \leq 16$), the proof contains $5$ integers, $2 \lceil \log_2(64p) \rceil + 4$ curve points, and verifies using a simplified Pippenger multiexponentiation operation that combines fixed and variable base operations:
 
 \begin{itemize}
     \setlength\itemsep{\listspace}
-    \item [\textbf{DVBA}] Double-variable-base addition for some integers $a, b$, and point $B$: $a G + b B$ \quad \([2*k]\)
-\end{itemize}
-
-Verifiers need to calculate $C_i - 2^i H$ and $\sum_i C_i$, so verification times include:
-
-\begin{itemize}
-    \setlength\itemsep{\listspace}
-    \item [\textbf{PA}] Point addition for some points $A, B$: $A + B$ \quad \([k-1]\)
-    \item [\textbf{PS}] Point subtraction for some points $A, B$ : $A - B$ \quad \([k]\)
-    \item [\textbf{KBSM}] Known-base scalar multiplications for some integer $a$: $a G$ \quad \([k]\)
-\end{itemize}
-
-Monero\marginnote{src/ringct/ rctSigs.cpp verRange()} uses a special function to compute $C_i - 2^i H$ and $\sum_i C_i = C$ that is supposed to be faster:
-
-\begin{itemize}
-    \setlength\itemsep{\listspace}
-    \item [\textbf{VRSF}] Verify range proof special function \quad \([k]\)
-\end{itemize}
-
-For\marginnote{src/ringct/ rctOps.cpp} a total verification requirement:
-
-\begin{itemize}
-    \setlength\itemsep{\listspace}
-    \item [\textbf{VRSF}] Verify range proof special function \quad \([k]\)
-    \item [\textbf{DVBA}] Double-variable-base addition for some integers $a, b$, and point $B$: $a G + b B$ \quad \([2*k]\)
+    \item [\textbf{MULT}] Multiexponentiation with $128p + 2$ fixed-base terms and $2 \lceil \log_2(64p) \rceil + p + 4$ variable-base terms
 \end{itemize}
